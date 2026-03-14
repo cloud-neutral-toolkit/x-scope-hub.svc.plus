@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -10,12 +11,13 @@ import (
 
 // Config represents the application configuration loaded from YAML.
 type Config struct {
-	Server      ServerConfig      `yaml:"server"`
-	Auth        AuthConfig        `yaml:"auth"`
-	RateLimiter RateLimiterConfig `yaml:"rate_limiter"`
-	Cache       CacheConfig       `yaml:"cache"`
-	Audit       AuditConfig       `yaml:"audit"`
-	Backends    BackendConfig     `yaml:"backends"`
+	Server         ServerConfig                   `yaml:"server"`
+	Auth           AuthConfig                     `yaml:"auth"`
+	RateLimiter    RateLimiterConfig              `yaml:"rate_limiter"`
+	Cache          CacheConfig                    `yaml:"cache"`
+	Audit          AuditConfig                    `yaml:"audit"`
+	Backends       BackendConfig                  `yaml:"backends"`
+	QueryTemplates map[string]QueryTemplateConfig `yaml:"query_templates"`
 }
 
 // ServerConfig controls HTTP server settings.
@@ -24,6 +26,8 @@ type ServerConfig struct {
 	ReadTimeout  time.Duration `yaml:"read_timeout"`
 	WriteTimeout time.Duration `yaml:"write_timeout"`
 	IdleTimeout  time.Duration `yaml:"idle_timeout"`
+	TenantHeader string        `yaml:"tenant_header"`
+	UserHeader   string        `yaml:"user_header"`
 }
 
 // AuthConfig configures JWT based authentication.
@@ -107,6 +111,13 @@ type MetadataConfig struct {
 	TenantLookupQuery string        `yaml:"tenant_lookup_query"`
 }
 
+// QueryTemplateConfig defines a reusable query template resolved by name.
+type QueryTemplateConfig struct {
+	Lang  string `yaml:"lang"`
+	Query string `yaml:"query"`
+	Step  string `yaml:"step"`
+}
+
 // Load reads configuration from the supplied path or returns defaults.
 func Load(path string) (Config, error) {
 	cfg := defaultConfig()
@@ -123,7 +134,8 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("read config: %w", err)
 	}
 
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	expanded := os.ExpandEnv(string(data))
+	if err := yaml.Unmarshal([]byte(expanded), &cfg); err != nil {
 		return Config{}, fmt.Errorf("unmarshal config: %w", err)
 	}
 
@@ -137,6 +149,8 @@ func defaultConfig() Config {
 			ReadTimeout:  15 * time.Second,
 			WriteTimeout: 15 * time.Second,
 			IdleTimeout:  60 * time.Second,
+			TenantHeader: "X-Tenant",
+			UserHeader:   "X-User",
 		},
 		Auth: AuthConfig{
 			Enabled:     false,
@@ -171,5 +185,53 @@ func defaultConfig() Config {
 				TraceTable:          "traces",
 			},
 		},
+		QueryTemplates: map[string]QueryTemplateConfig{
+			"service_error_rate": {
+				Lang:  "promql",
+				Query: `sum(rate(http_requests_total{service="{{service}}",status=~"5.."}[{{window}}])) / clamp_min(sum(rate(http_requests_total{service="{{service}}"}[{{window}}])), 1)`,
+				Step:  "5m",
+			},
+			"service_latency_p95": {
+				Lang:  "promql",
+				Query: `histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{service="{{service}}"}[{{window}}])) by (le))`,
+				Step:  "5m",
+			},
+			"service_error_logs": {
+				Lang:  "logql",
+				Query: `{service="{{service}}"} |= "error"`,
+			},
+			"service_error_traces": {
+				Lang:  "traceql",
+				Query: `FROM {{service}} WHERE error=true`,
+			},
+			"service_topology_logs": {
+				Lang:  "logql",
+				Query: `{service="{{service}}"}`,
+			},
+		},
 	}
+}
+
+// ResolveQueryTemplate renders a named query template using the provided variables.
+func (c Config) ResolveQueryTemplate(name string, variables map[string]string) (QueryTemplateConfig, bool) {
+	template, ok := c.QueryTemplates[name]
+	if !ok {
+		return QueryTemplateConfig{}, false
+	}
+	if len(variables) == 0 {
+		return template, true
+	}
+	rendered := template
+	rendered.Query = applyTemplateVariables(rendered.Query, variables)
+	rendered.Step = applyTemplateVariables(rendered.Step, variables)
+	rendered.Lang = strings.TrimSpace(rendered.Lang)
+	return rendered, true
+}
+
+func applyTemplateVariables(input string, variables map[string]string) string {
+	out := input
+	for key, value := range variables {
+		out = strings.ReplaceAll(out, "{{"+strings.TrimSpace(key)+"}}", value)
+	}
+	return out
 }

@@ -1,0 +1,10 @@
+model = "gpt-5.4"
+sandbox_mode = "read-only"
+
+[mcp_servers.xscopehub]
+url = "http://127.0.0.1:8000/mcp"
+bearer_token_env_var = "XSCOPE_MCP_SERVER_AUTH_TOKEN"
+
+[mcp_servers.xscopehub.env_http_headers]
+"X-Tenant" = "XSCOPE_DEFAULT_TENANT"
+"X-User" = "XSCOPE_DEFAULT_USER"

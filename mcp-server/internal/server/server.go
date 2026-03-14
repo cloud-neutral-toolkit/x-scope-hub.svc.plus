@@ -19,19 +19,22 @@ type Options struct {
 	Registry     *registry.Registry
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
+	AuthToken    string
 }
 
 // Server implements http.Handler for MCP JSON-RPC.
 type Server struct {
-	manifest manifest.Manifest
-	registry *registry.Registry
+	manifest  manifest.Manifest
+	registry  *registry.Registry
+	authToken string
 }
 
 // New creates a new MCP server instance.
 func New(opts Options) *Server {
 	return &Server{
-		manifest: opts.Manifest,
-		registry: opts.Registry,
+		manifest:  opts.Manifest,
+		registry:  opts.Registry,
+		authToken: opts.AuthToken,
 	}
 }
 
@@ -39,6 +42,10 @@ func New(opts Options) *Server {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/mcp" {
 		http.NotFound(w, r)
+		return
+	}
+	if s.authToken != "" && !authorized(r.Header.Get("Authorization"), s.authToken) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -64,7 +71,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := s.handleRequest(req)
+	resp := s.handleRequest(req, r)
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		log.Printf("encode response: %v", err)
@@ -93,7 +100,7 @@ type Error struct {
 	Message string `json:"message"`
 }
 
-func (s *Server) handleRequest(req Request) Response {
+func (s *Server) handleRequest(req Request, httpReq *http.Request) Response {
 	switch req.Method {
 	case "resources/list":
 		return s.handleResourcesList(req)
@@ -102,7 +109,7 @@ func (s *Server) handleRequest(req Request) Response {
 	case "tools/list":
 		return s.handleToolsList(req)
 	case "tools/call":
-		return s.handleToolsCall(req)
+		return s.handleToolsCall(req, httpReq)
 	case "manifest/get":
 		return s.handleManifest(req)
 	default:
@@ -135,7 +142,7 @@ func (s *Server) handleToolsList(req Request) Response {
 	return Response{JSONRPC: "2.0", ID: req.ID, Result: tools}
 }
 
-func (s *Server) handleToolsCall(req Request) Response {
+func (s *Server) handleToolsCall(req Request, httpReq *http.Request) Response {
 	var params struct {
 		Name      string                 `json:"name"`
 		Arguments map[string]interface{} `json:"arguments"`
@@ -147,12 +154,28 @@ func (s *Server) handleToolsCall(req Request) Response {
 	if params.Arguments == nil {
 		params.Arguments = map[string]interface{}{}
 	}
+	params.Arguments["_mcp_request_headers"] = flattenHeaders(httpReq.Header)
 
 	result, err := s.registry.InvokeTool(params.Name, params.Arguments)
 	if err != nil {
 		return errorResponse(req.ID, -32000, err.Error())
 	}
 	return Response{JSONRPC: "2.0", ID: req.ID, Result: result}
+}
+
+func authorized(header string, expected string) bool {
+	return header == "Bearer "+expected
+}
+
+func flattenHeaders(headers http.Header) map[string]interface{} {
+	out := make(map[string]interface{}, len(headers))
+	for key, values := range headers {
+		if len(values) == 0 {
+			continue
+		}
+		out[key] = values[0]
+	}
+	return out
 }
 
 func (s *Server) handleManifest(req Request) Response {

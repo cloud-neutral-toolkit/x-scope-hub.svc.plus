@@ -27,7 +27,7 @@ type Server struct {
 	cfg      config.Config
 	router   chi.Router
 	auth     *auth.Authenticator
-	backend  *backend.Client
+	backend  queryBackend
 	cache    *cache.Cache
 	limiter  *limiter.Limiter
 	auditLog *audit.Logger
@@ -35,8 +35,14 @@ type Server struct {
 	activeRequests int64
 }
 
+type queryBackend interface {
+	QueryPromQL(context.Context, string, query.Request) (backend.Result, error)
+	QueryLogQL(context.Context, string, query.Request) (backend.Result, error)
+	QueryTraceQL(context.Context, string, query.Request) (backend.Result, error)
+}
+
 // New constructs a server with all dependencies wired.
-func New(cfg config.Config, auth *auth.Authenticator, backend *backend.Client, cache *cache.Cache, limiter *limiter.Limiter, auditLog *audit.Logger) *Server {
+func New(cfg config.Config, auth *auth.Authenticator, backend queryBackend, cache *cache.Cache, limiter *limiter.Limiter, auditLog *audit.Logger) *Server {
 	s := &Server{
 		cfg:      cfg,
 		auth:     auth,
@@ -111,6 +117,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	req = s.resolveTemplate(req)
 	req.Lang = strings.ToLower(req.Lang)
 	if req.Query == "" {
 		s.writeError(w, http.StatusBadRequest, "query is required")
@@ -126,8 +133,16 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	tenant := r.Header.Get("X-Tenant")
-	user := r.Header.Get("X-User")
+	tenantHeader := s.cfg.Server.TenantHeader
+	if tenantHeader == "" {
+		tenantHeader = "X-Tenant"
+	}
+	userHeader := s.cfg.Server.UserHeader
+	if userHeader == "" {
+		userHeader = "X-User"
+	}
+	tenant := r.Header.Get(tenantHeader)
+	user := r.Header.Get(userHeader)
 	if s.auth != nil {
 		if t, u, err := s.auth.Verify(r); err == nil {
 			tenant, user = t, u
@@ -255,7 +270,7 @@ func (s *Server) writeError(w http.ResponseWriter, status int, msg string) {
 
 func buildCacheKey(req query.Request, tenant string) string {
 	var parts []string
-	parts = append(parts, strings.ToLower(req.Lang), req.Query, tenant)
+	parts = append(parts, strings.ToLower(req.Lang), req.Query, req.Template, tenant)
 	if !req.Start.IsZero() {
 		parts = append(parts, req.Start.UTC().Format(time.RFC3339Nano))
 	}
@@ -269,4 +284,26 @@ func buildCacheKey(req query.Request, tenant string) string {
 		parts = append(parts, "normalize=true")
 	}
 	return strings.Join(parts, "|")
+}
+
+func (s *Server) resolveTemplate(req query.Request) query.Request {
+	templateName := strings.TrimSpace(req.Template)
+	if templateName == "" {
+		return req
+	}
+
+	rendered, ok := s.cfg.ResolveQueryTemplate(templateName, req.Variables)
+	if !ok {
+		return req
+	}
+	if strings.TrimSpace(req.Lang) == "" {
+		req.Lang = rendered.Lang
+	}
+	if strings.TrimSpace(req.Query) == "" {
+		req.Query = rendered.Query
+	}
+	if strings.TrimSpace(req.Step) == "" {
+		req.Step = rendered.Step
+	}
+	return req
 }

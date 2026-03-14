@@ -16,3 +16,6 @@
 [submodule "openobserve"]
 	path = openobserve
 	url = https://github.com/openobserve/openobserve.git
+[submodule "third_party/codex"]
+	path = third_party/codex
+	url = https://github.com/openai/codex.git

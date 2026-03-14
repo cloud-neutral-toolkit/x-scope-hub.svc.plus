@@ -1,60 +1,61 @@
 server:
   api:
-    listen: "0.0.0.0:8100"
-    response_format: json   # json | ndjson | text
+    listen: "0.0.0.0:${XSCOPE_LLM_OPS_AGENT_PORT}"
+    response_format: json
 
 inputs:
   postgres:
-    url: "postgres://shenlan:password@127.0.0.1:5432/shenlan?sslmode=disable"
+    url: "${DATABASE_URL}"
+  observe_gateway:
+    endpoint: "${XSCOPE_OBSERVE_GATEWAY_URL}"
+    tenant_header: "${OBSERVE_GATEWAY_TENANT_HEADER}"
+    user_header: "${OBSERVE_GATEWAY_USER_HEADER}"
+    default_tenant: "${XSCOPE_DEFAULT_TENANT}"
+    default_user: "${XSCOPE_DEFAULT_USER}"
+    timeout: 20s
   openobserve:
-    endpoint: "https://otel.svc.plus/api/default/"
-    headers:
-      Authorization: "Basic YWRtaW5AZXhhbXBsZS5jb206Q29tcGxleFBhc3MxMjMh"
+    endpoint: ""
+    headers: {}
 
 models:
   embedder:
-    name: "bge-m3"
-    endpoint: "http://127.0.0.1:9000/v1/embeddings"
+    name: "disabled"
+    endpoint: ""
   generator:
-    models:
-      - "deepseek-r1:8b"
-    endpoint: "http://127.0.0.1:11434/v1/chat/completions"
+    models: []
+    endpoint: ""
+  codex:
+    enabled: ${XSCOPE_CODEX_ENABLED}
+    command: "${XSCOPE_CODEX_COMMAND}"
+    args: []
+    working_dir: "/Users/shenlan/workspaces/cloud-neutral-toolkit/x-scope-hub.svc.plus"
+    timeout: ${XSCOPE_CODEX_TIMEOUT}
+    env:
+      CODEX_HOME: "${XSCOPE_CODEX_HOME}"
+      XSCOPE_CODEX_MODEL: "${XSCOPE_CODEX_MODEL}"
+      XSCOPE_CODEX_SANDBOX: "${XSCOPE_CODEX_SANDBOX}"
+      XSCOPE_MCP_SERVER_URL: "${XSCOPE_MCP_SERVER_URL}"
+      XSCOPE_MCP_SERVER_AUTH_TOKEN: "${XSCOPE_MCP_SERVER_AUTH_TOKEN}"
+      XSCOPE_DEFAULT_TENANT: "${XSCOPE_DEFAULT_TENANT}"
+      XSCOPE_DEFAULT_USER: "${XSCOPE_DEFAULT_USER}"
 
-outputs:                      # === 动作/投递通道（sinks）===
+outputs:
   github_pr:
-    enabled: true
-    repo: "svc-design/gitops"           # 或 owner/repo
-    token_env: "GITHUB_TOKEN"           # 从环境变量取 token
-    pr:
-      number: 0                         # 0/缺省表示自动创建 PR
-      title: "XOpsAgent Report {{date}}"
-      branch: "xops/daily-{{date}}"
-      commit_message: "chore(xops): add report {{case_id}}"
-      files:
-        - from: "reports/{{case_id}}.md"
-          to:   "reports/{{case_id}}.md"
+    enabled: false
+    repo: ""
+    token_env: "GITHUB_TOKEN"
 
   file_report:
-    enabled: true
-    path: "./reports/{{case_id}}.md"    # 支持模板变量
-    format: "markdown"                  # markdown | json
+    enabled: false
+    path: "./reports/{{case_id}}.md"
+    format: "markdown"
 
   answer:
     enabled: true
-    channel: "stdout"                   # stdout | http-response | webhook
+    channel: "stdout"
 
   webhook:
     enabled: false
     url: "https://example.com/hook"
     headers:
       X-Token: "secret"
-
-routing:                      # === 路由规则：什么事件投递到哪些通道 ===
-  default:
-    - answer
-    - file_report
-  on_action:
-    plan.approved:
-      - github_pr
-  on_error:
-    - webhook

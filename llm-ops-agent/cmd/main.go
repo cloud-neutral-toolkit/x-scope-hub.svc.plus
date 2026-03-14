@@ -1,22 +1,29 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
+	"time"
 
 	"github.com/gin-gonic/gin"
-
+	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	daemon "github.com/sevlyar/go-daemon"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
 	"github.com/yourname/XOpsAgent/api"
+	"github.com/yourname/XOpsAgent/internal/analysis"
+	"github.com/yourname/XOpsAgent/internal/ports/postgres"
+	"github.com/yourname/XOpsAgent/internal/services/orchestrator"
 )
 
 type Config struct {
@@ -34,6 +41,15 @@ type Config struct {
 			Endpoint string            `yaml:"endpoint"`
 			Headers  map[string]string `yaml:"headers"`
 		} `yaml:"openobserve"`
+		ObserveGateway struct {
+			Endpoint      string            `yaml:"endpoint"`
+			Headers       map[string]string `yaml:"headers"`
+			TenantHeader  string            `yaml:"tenant_header"`
+			UserHeader    string            `yaml:"user_header"`
+			DefaultTenant string            `yaml:"default_tenant"`
+			DefaultUser   string            `yaml:"default_user"`
+			Timeout       time.Duration     `yaml:"timeout"`
+		} `yaml:"observe_gateway"`
 	} `yaml:"inputs"`
 	Models struct {
 		Embedder struct {
@@ -44,22 +60,20 @@ type Config struct {
 			Models   []string `yaml:"models"`
 			Endpoint string   `yaml:"endpoint"`
 		} `yaml:"generator"`
+		Codex struct {
+			Enabled    bool              `yaml:"enabled"`
+			Command    string            `yaml:"command"`
+			Args       []string          `yaml:"args"`
+			WorkingDir string            `yaml:"working_dir"`
+			Timeout    time.Duration     `yaml:"timeout"`
+			Env        map[string]string `yaml:"env"`
+		} `yaml:"codex"`
 	} `yaml:"models"`
 	Outputs struct {
 		GitHubPR struct {
 			Enabled  bool   `yaml:"enabled"`
 			Repo     string `yaml:"repo"`
 			TokenEnv string `yaml:"token_env"`
-			PR       struct {
-				Number        int    `yaml:"number"`
-				Title         string `yaml:"title"`
-				Branch        string `yaml:"branch"`
-				CommitMessage string `yaml:"commit_message"`
-				Files         []struct {
-					From string `yaml:"from"`
-					To   string `yaml:"to"`
-				} `yaml:"files"`
-			} `yaml:"pr"`
 		} `yaml:"github_pr"`
 		FileReport struct {
 			Enabled bool   `yaml:"enabled"`
@@ -76,11 +90,6 @@ type Config struct {
 			Headers map[string]string `yaml:"headers"`
 		} `yaml:"webhook"`
 	} `yaml:"outputs"`
-	Routing struct {
-		Default  []string            `yaml:"default"`
-		OnAction map[string][]string `yaml:"on_action"`
-		OnError  []string            `yaml:"on_error"`
-	} `yaml:"routing"`
 }
 
 func loadConfig(path string) (*Config, error) {
@@ -88,8 +97,9 @@ func loadConfig(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	expanded := os.ExpandEnv(string(data))
 	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	if err := yaml.Unmarshal([]byte(expanded), &cfg); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
@@ -102,23 +112,144 @@ func runAgent(cfgPath string) error {
 	}
 	logConnections(cfg)
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	var sqlDB *sql.DB
+	var pool *pgxpool.Pool
+	var caseSvc orchestrator.Service
+	if cfg.Inputs.Postgres.URL != "" {
+		sqlDB, pool, caseSvc, err = newCaseService(ctx, cfg.Inputs.Postgres.URL)
+		if err != nil {
+			return fmt.Errorf("init case service: %w", err)
+		}
+		defer sqlDB.Close()
+		defer pool.Close()
+	}
+
+	analysisSvc, err := newAnalysisService(cfg, cfgPath)
+	if err != nil {
+		return fmt.Errorf("init analysis service: %w", err)
+	}
+
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery())
-	api.RegisterRoutes(r, nil)
+	api.RegisterRoutes(r, caseSvc)
+	api.RegisterAnalysisRoutes(r, analysisSvc)
 
 	listen := cfg.Server.API.Listen
 	if listen == "" {
-		return fmt.Errorf("server.api.listen must be set in config")
+		listen = "0.0.0.0:8100"
 	}
 
-	log.Printf("XOpsAgent daemon listening on %s", listen)
-	return r.Run(listen)
+	srv := &http.Server{
+		Addr:              listen,
+		Handler:           r,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		log.Printf("XOpsAgent daemon listening on %s", listen)
+		errCh <- srv.ListenAndServe()
+	}()
+
+	select {
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return srv.Shutdown(shutdownCtx)
+	case err := <-errCh:
+		if err == nil || err == http.ErrServerClosed {
+			return nil
+		}
+		return err
+	}
+}
+
+func newCaseService(ctx context.Context, databaseURL string) (*sql.DB, *pgxpool.Pool, orchestrator.Service, error) {
+	sqlDB, err := sql.Open("pgx", databaseURL)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if err := sqlDB.PingContext(ctx); err != nil {
+		sqlDB.Close()
+		return nil, nil, nil, err
+	}
+
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		sqlDB.Close()
+		return nil, nil, nil, err
+	}
+
+	repo := postgres.NewCaseRepository(pool)
+	return sqlDB, pool, orchestrator.New(repo), nil
+}
+
+func newAnalysisService(cfg *Config, cfgPath string) (analysis.Service, error) {
+	gatewayCfg := cfg.Inputs.ObserveGateway
+	if gatewayCfg.Endpoint == "" {
+		gatewayCfg.Endpoint = cfg.Inputs.OpenObserve.Endpoint
+	}
+	if len(gatewayCfg.Headers) == 0 {
+		gatewayCfg.Headers = cfg.Inputs.OpenObserve.Headers
+	}
+
+	var reasoner analysis.Reasoner
+	if cfg.Models.Codex.Enabled || cfg.Models.Codex.Command != "" {
+		command := cfg.Models.Codex.Command
+		if command == "" {
+			command = filepath.Join(repoRootFromConfig(cfgPath), "scripts/codex/run-monitor.sh")
+		}
+		reasoner = analysis.NewCodexReasoner(analysis.CodexReasonerConfig{
+			Command:    command,
+			Args:       cfg.Models.Codex.Args,
+			WorkingDir: defaultWorkingDir(cfg.Models.Codex.WorkingDir, cfgPath),
+			Timeout:    cfg.Models.Codex.Timeout,
+			Env:        cfg.Models.Codex.Env,
+		})
+	}
+
+	return analysis.NewService(analysis.Options{
+		Gateway: analysis.GatewayOptions{
+			Endpoint:     gatewayCfg.Endpoint,
+			Headers:      gatewayCfg.Headers,
+			TenantHeader: gatewayCfg.TenantHeader,
+			UserHeader:   gatewayCfg.UserHeader,
+			Timeout:      gatewayCfg.Timeout,
+		},
+		Reasoner:      reasoner,
+		DefaultTenant: gatewayCfg.DefaultTenant,
+		DefaultUser:   gatewayCfg.DefaultUser,
+		DefaultWindow: time.Hour,
+		MaxItems:      50,
+	})
+}
+
+func repoRootFromConfig(cfgPath string) string {
+	abs, err := filepath.Abs(cfgPath)
+	if err != nil {
+		return "."
+	}
+	return filepath.Dir(filepath.Dir(abs))
+}
+
+func defaultWorkingDir(workingDir string, cfgPath string) string {
+	if workingDir != "" {
+		return workingDir
+	}
+	return repoRootFromConfig(cfgPath)
 }
 
 func logConnections(cfg *Config) {
 	logger := slog.Default()
 	checkPostgres(logger, cfg.Inputs.Postgres.URL)
-	checkHTTP(logger, "inputs.openobserve", cfg.Inputs.OpenObserve.Endpoint, cfg.Inputs.OpenObserve.Headers)
+	if cfg.Inputs.ObserveGateway.Endpoint != "" {
+		checkHTTP(logger, "inputs.observe_gateway", cfg.Inputs.ObserveGateway.Endpoint, cfg.Inputs.ObserveGateway.Headers)
+	} else {
+		checkHTTP(logger, "inputs.openobserve", cfg.Inputs.OpenObserve.Endpoint, cfg.Inputs.OpenObserve.Headers)
+	}
 	checkHTTP(logger, "models.embedder", cfg.Models.Embedder.Endpoint, nil)
 	checkHTTP(logger, "models.generator", cfg.Models.Generator.Endpoint, nil)
 
@@ -137,6 +268,10 @@ func logConnections(cfg *Config) {
 }
 
 func checkPostgres(logger *slog.Logger, url string) {
+	if url == "" {
+		logger.Debug("inputs.postgres not configured")
+		return
+	}
 	db, err := sql.Open("pgx", url)
 	if err != nil {
 		logger.Error("inputs.postgres connection", "error", err)
@@ -155,7 +290,7 @@ func checkHTTP(logger *slog.Logger, name, url string, headers map[string]string)
 		logger.Debug(name + " not configured")
 		return
 	}
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		logger.Error(name+" request", "endpoint", url, "error", err)
 		return
@@ -215,7 +350,7 @@ func main() {
 			if daemonMode {
 				cntxt := &daemon.Context{
 					PidFileName: "xopsagent.pid",
-					PidFilePerm: 0644,
+					PidFilePerm: 0o644,
 				}
 				child, err := cntxt.Reborn()
 				if err != nil {

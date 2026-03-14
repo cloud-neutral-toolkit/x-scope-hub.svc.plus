@@ -7,12 +7,14 @@ import (
 
 // Request defines the payload for POST /api/query.
 type Request struct {
-	Lang      string    `json:"lang"`
-	Query     string    `json:"query"`
-	Start     time.Time `json:"start"`
-	End       time.Time `json:"end"`
-	Step      string    `json:"step"`
-	Normalize bool      `json:"normalize"`
+	Lang      string            `json:"lang"`
+	Query     string            `json:"query"`
+	Template  string            `json:"template"`
+	Variables map[string]string `json:"variables"`
+	Start     time.Time         `json:"start"`
+	End       time.Time         `json:"end"`
+	Step      string            `json:"step"`
+	Normalize bool              `json:"normalize"`
 }
 
 // Response wraps upstream responses with additional metadata.

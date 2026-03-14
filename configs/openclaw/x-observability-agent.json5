@@ -1,0 +1,36 @@
+{
+  agents: {
+    list: [
+      {
+        id: "x-observability-agent",
+        name: "XScopeHub Observability",
+        default: false,
+        workspace: "/Users/shenlan/workspaces/cloud-neutral-toolkit/x-scope-hub.svc.plus",
+        runtime: {
+          type: "acp",
+          acp: {
+            agent: "codex",
+            backend: "acpx",
+            mode: "persistent",
+            cwd: "/Users/shenlan/workspaces/cloud-neutral-toolkit/x-scope-hub.svc.plus",
+          },
+        },
+        tools: {
+          allow: ["read", "grep", "glob", "ls", "fetch", "web_search"],
+        },
+      },
+    ],
+  },
+  bindings: [
+    {
+      type: "acp",
+      agentId: "x-observability-agent",
+      match: {
+        channel: "discord",
+        accountId: "default",
+        peer: { kind: "channel", id: "REPLACE_WITH_CHANNEL_ID" },
+      },
+      acp: { label: "x-observability-agent-main" },
+    },
+  ],
+}

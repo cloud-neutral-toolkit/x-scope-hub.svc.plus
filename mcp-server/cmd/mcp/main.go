@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -44,10 +45,11 @@ func usage() {
 
 func serve(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	addr := fs.String("addr", ":8000", "Address to listen on")
-	manifestPath := fs.String("manifest", "manifest.json", "Path to manifest file")
+	addr := fs.String("addr", getenv("XSCOPE_MCP_LISTEN_ADDR", ":8000"), "Address to listen on")
+	manifestPath := fs.String("manifest", getenv("XSCOPE_MCP_SERVER_MANIFEST", "manifest.json"), "Path to manifest file")
 	readTimeout := fs.Duration("read-timeout", 5*time.Second, "HTTP server read timeout")
 	writeTimeout := fs.Duration("write-timeout", 10*time.Second, "HTTP server write timeout")
+	authToken := fs.String("auth-token", os.Getenv("XSCOPE_MCP_SERVER_AUTH_TOKEN"), "Optional bearer token required by /mcp")
 	_ = fs.Parse(args)
 
 	mf, err := manifest.Load(*manifestPath)
@@ -58,7 +60,15 @@ func serve(args []string) {
 	reg := registry.New()
 
 	// Register Plugins
-	obsPlugin := plugins.NewObservabilityPlugin()
+	obsPlugin := plugins.NewObservabilityPlugin(plugins.ObservabilityPluginConfig{
+		ObserveGatewayURL: getenv("XSCOPE_OBSERVE_GATEWAY_URL", "http://127.0.0.1:8080"),
+		LlmOpsAgentURL:    getenv("XSCOPE_LLM_OPS_AGENT_URL", "http://127.0.0.1:8100"),
+		DefaultTenant:     os.Getenv("XSCOPE_DEFAULT_TENANT"),
+		DefaultUser:       os.Getenv("XSCOPE_DEFAULT_USER"),
+		TenantHeader:      getenv("OBSERVE_GATEWAY_TENANT_HEADER", "X-Tenant"),
+		UserHeader:        getenv("OBSERVE_GATEWAY_USER_HEADER", "X-User"),
+		Timeout:           durationFromEnv("XSCOPE_MCP_UPSTREAM_TIMEOUT", 20*time.Second),
+	})
 	if err := reg.RegisterPlugin(obsPlugin); err != nil {
 		log.Fatalf("failed to register observability plugin: %v", err)
 	}
@@ -68,6 +78,7 @@ func serve(args []string) {
 		Registry:     reg,
 		ReadTimeout:  *readTimeout,
 		WriteTimeout: *writeTimeout,
+		AuthToken:    strings.TrimSpace(*authToken),
 	})
 
 	httpSrv := &http.Server{
@@ -111,4 +122,23 @@ func printManifest(args []string) {
 	if err := enc.Encode(mf); err != nil {
 		log.Fatalf("failed to encode manifest: %v", err)
 	}
+}
+
+func getenv(key string, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func durationFromEnv(key string, fallback time.Duration) time.Duration {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }

@@ -1,8 +1,16 @@
 {
   "name": "xscopehub",
   "version": "1.0.0",
-  "description": "Cloud observability and AI insight service",
+  "description": "XScopeHub monitoring analysis MCP server backed by observe-gateway and llm-ops-agent",
   "entry_point": "http://localhost:8000/mcp",
-  "resources": ["logs", "metrics", "traces", "topology", "knowledge"],
-  "tools": ["query_logs", "summarize_alerts"]
+  "resources": ["monitoring_capabilities", "analysis_templates"],
+  "tools": [
+    "query_metrics",
+    "query_logs",
+    "query_traces",
+    "get_topology",
+    "analyze_incident",
+    "summarize_service_health",
+    "propose_remediation"
+  ]
 }

@@ -1,0 +1,72 @@
+server:
+  address: ":8080"
+  read_timeout: 15s
+  write_timeout: 15s
+  idle_timeout: 60s
+  tenant_header: "X-Tenant"
+  user_header: "X-User"
+
+auth:
+  enabled: false
+  jwks_url: "${OBSERVE_GATEWAY_JWKS_URL}"
+  audience: ["${OBSERVE_GATEWAY_JWT_AUDIENCE}"]
+  issuer: "${OBSERVE_GATEWAY_JWT_ISSUER}"
+  tenant_claim: "tenant"
+  user_claim: "email"
+  cache_ttl: 1h
+  insecure_tls: false
+
+cache:
+  enabled: true
+  num_counters: 50000
+  max_cost: 268435456
+  buffer_items: 64
+  ttl: 1m
+
+audit:
+  enabled: true
+
+backends:
+  openobserve:
+    base_url: "${OBSERVABILITY_OPENOBSERVE_BASE_URL}"
+    org: "${OBSERVABILITY_OPENOBSERVE_ORG}"
+    api_key: "${OBSERVABILITY_OPENOBSERVE_API_KEY}"
+    timeout: 30s
+    prom_query_endpoint: "/api/%s/promql/query"
+    prom_range_endpoint: "/api/%s/promql/query_range"
+    log_search_endpoint: "/api/%s/_search"
+    trace_search_endpoint: "/api/%s/traces"
+    log_table: "logs"
+    trace_table: "traces"
+  fallback:
+    enabled: false
+    base_url: "${OBSERVABILITY_FALLBACK_PROM_BASE_URL}"
+    api_key: "${OBSERVABILITY_FALLBACK_PROM_TOKEN}"
+    timeout: 20s
+    query_endpoint: "/api/v1/query"
+    range_endpoint: "/api/v1/query_range"
+  metadata:
+    enabled: false
+    dsn: "${DATABASE_URL}"
+    max_connections: 10
+    max_conn_idle_time: 5m
+    tenant_lookup_query: "SELECT org, log_table, trace_table FROM tenant_metadata WHERE tenant = $1"
+
+query_templates:
+  service_error_rate:
+    lang: "promql"
+    query: "sum(rate(http_requests_total{service=\"{{service}}\",status=~\"5..\"}[{{window}}])) / clamp_min(sum(rate(http_requests_total{service=\"{{service}}\"}[{{window}}])), 1)"
+    step: "5m"
+  service_latency_p95:
+    lang: "promql"
+    query: "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{service=\"{{service}}\"}[{{window}}])) by (le))"
+    step: "5m"
+  service_error_logs:
+    lang: "logql"
+    query: "{service=\"{{service}}\"} |= \"error\""
+  service_error_traces:
+    lang: "traceql"
+    query: "FROM {{service}} WHERE error=true"
+  service_topology_logs:
+    lang: "logql"
+    query: "{service=\"{{service}}\"} |= \"upstream\""
