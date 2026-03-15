@@ -11,6 +11,29 @@ This repository hosts multiple components:
 - `agents/` – external agent integrations (deepflow, node_exporter, process-exporter, vector).
 - `openobserve` and `opentelemetry-collector` – external dependencies tracked as submodules.
 
+### Quickstart
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/cloud-neutral-toolkit/x-scope-hub.svc.plus/main/scripts/setup.sh?$(date +%s)" \
+  | bash -s -- x-scope-hub.svc.plus --mode process
+```
+
+Optional deployment modes:
+
+```bash
+# Process deployment mode (default)
+curl -fsSL "https://raw.githubusercontent.com/cloud-neutral-toolkit/x-scope-hub.svc.plus/main/scripts/setup.sh?$(date +%s)" \
+  | bash -s -- x-scope-hub.svc.plus --mode process
+
+# Docker deployment mode
+curl -fsSL "https://raw.githubusercontent.com/cloud-neutral-toolkit/x-scope-hub.svc.plus/main/scripts/setup.sh?$(date +%s)" \
+  | bash -s -- x-scope-hub.svc.plus --mode docker
+
+# Cloud Run deployment mode
+curl -fsSL "https://raw.githubusercontent.com/cloud-neutral-toolkit/x-scope-hub.svc.plus/main/scripts/setup.sh?$(date +%s)" \
+  | bash -s -- x-scope-hub.svc.plus --mode cloud-run
+```
+
 ### Architecture
 
 ```text
@@ -72,6 +95,29 @@ LG ─┘
 - `llm-ops-agent/` – 计划中的 LLM 运维代理。
 - `agents/` – 外部采集器集成（deepflow、node_exporter、process-exporter、vector）。
 - `openobserve` 和 `opentelemetry-collector` – 以子模块方式跟踪的外部依赖。
+
+### 快速开始
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/cloud-neutral-toolkit/x-scope-hub.svc.plus/main/scripts/setup.sh?$(date +%s)" \
+  | bash -s -- x-scope-hub.svc.plus --mode process
+```
+
+可选部署模式：
+
+```bash
+# 进程部署模式（默认）
+curl -fsSL "https://raw.githubusercontent.com/cloud-neutral-toolkit/x-scope-hub.svc.plus/main/scripts/setup.sh?$(date +%s)" \
+  | bash -s -- x-scope-hub.svc.plus --mode process
+
+# Docker 部署模式
+curl -fsSL "https://raw.githubusercontent.com/cloud-neutral-toolkit/x-scope-hub.svc.plus/main/scripts/setup.sh?$(date +%s)" \
+  | bash -s -- x-scope-hub.svc.plus --mode docker
+
+# Cloud Run 部署模式
+curl -fsSL "https://raw.githubusercontent.com/cloud-neutral-toolkit/x-scope-hub.svc.plus/main/scripts/setup.sh?$(date +%s)" \
+  | bash -s -- x-scope-hub.svc.plus --mode cloud-run
+```
 
 ### 架构
 
