@@ -7,3 +7,5 @@ agents/vector/
 openobserve/
 observe-bridge/bin/
 llm-ops-agent/bin/
+ansible/vars/*.host.yml
+ansible/vars/*.vault.yml

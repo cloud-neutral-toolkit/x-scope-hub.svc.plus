@@ -1,0 +1,7 @@
+- name: Load x-scope-hub compose defaults
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/defaults/main.yml"
+
+- name: Delegate x-scope-hub deployment to the shared compose role
+  ansible.builtin.include_role:
+    name: shared_compose_service_deploy

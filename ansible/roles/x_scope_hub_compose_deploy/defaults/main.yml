@@ -1,0 +1,15 @@
+service_compose_service_slug: x-scope-hub
+service_compose_image: REPLACE_IMAGE
+service_compose_zone: svc.plus
+service_compose_container_port: 8080
+service_compose_healthcheck_path: /manifest
+service_compose_git_short_commit: "{{ lookup('ansible.builtin.env', 'GIT_SHORT_COMMIT') | default('manual', true) }}"
+service_compose_deploy_targets:
+  - name: prod
+    deploy_subdomain_prefix: x-scope-hub
+    stable_domains:
+      - x-scope-hub.svc.plus
+    host_port: 18085
+    healthcheck_path: /manifest
+    env: {}
+

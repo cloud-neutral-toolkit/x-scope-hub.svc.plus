@@ -1,0 +1,26 @@
+# Copy to ansible/vars/x-scope-hub.host.yml (gitignored), or store the real values
+# in an external Ansible Vault file and pass it with:
+#   ansible-playbook -D -C ansible/playbooks/deploy_x_scope_hub_compose.yml -e @/secure/path/x-scope-hub.vault.yml
+#
+# This profile assumes x-scope-hub.svc.plus points at the stateless mcp-server image.
+
+service_compose_image: ghcr.io/YOUR_GITHUB_ORG/x-scope-hub:latest
+service_compose_registry_server: ghcr.io
+service_compose_registry_username: CHANGE_ME
+service_compose_registry_password: CHANGE_ME
+service_compose_healthcheck_path: /manifest
+service_compose_env_common:
+  XSCOPE_MCP_SERVER_AUTH_TOKEN: CHANGE_ME
+  XSCOPE_OBSERVE_GATEWAY_URL: CHANGE_ME
+  XSCOPE_LLM_OPS_AGENT_URL: CHANGE_ME
+  XSCOPE_DEFAULT_TENANT: CHANGE_ME
+  XSCOPE_DEFAULT_USER: CHANGE_ME
+  XSCOPE_MCP_UPSTREAM_TIMEOUT: 20s
+service_compose_deploy_targets:
+  - name: prod
+    deploy_subdomain_prefix: x-scope-hub
+    stable_domains:
+      - x-scope-hub.svc.plus
+    host_port: 18085
+    healthcheck_path: /manifest
+    env: {}
