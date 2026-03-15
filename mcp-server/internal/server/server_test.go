@@ -84,3 +84,42 @@ func TestServeHTTPRequiresBearerTokenWhenConfigured(t *testing.T) {
 		t.Fatalf("expected 200, got %d", res.Code)
 	}
 }
+
+func TestServeHTTPManifestEndpoint(t *testing.T) {
+	mf := manifest.Manifest{Name: "xscopehub"}
+	reg := registry.New()
+	if err := reg.RegisterPlugin(plugins.NewObservabilityPlugin(plugins.ObservabilityPluginConfig{})); err != nil {
+		t.Fatalf("failed to register plugin: %v", err)
+	}
+
+	srv := New(Options{Manifest: mf, Registry: reg})
+	req := httptest.NewRequest(http.MethodGet, "/manifest", nil)
+	res := httptest.NewRecorder()
+
+	srv.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", res.Code)
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if _, ok := payload["manifest"]; !ok {
+		t.Fatalf("expected manifest payload")
+	}
+}
+
+func TestServeHTTPHealthzEndpoint(t *testing.T) {
+	srv := New(Options{Manifest: manifest.Manifest{Name: "xscopehub"}, Registry: registry.New()})
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	res := httptest.NewRecorder()
+
+	srv.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", res.Code)
+	}
+}

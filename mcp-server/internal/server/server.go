@@ -40,7 +40,15 @@ func New(opts Options) *Server {
 
 // ServeHTTP implements http.Handler.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/mcp" {
+	switch r.URL.Path {
+	case "/healthz":
+		s.serveHealth(w, r)
+		return
+	case "/manifest":
+		s.serveManifestHTTP(w, r)
+		return
+	case "/mcp":
+	default:
 		http.NotFound(w, r)
 		return
 	}
@@ -75,6 +83,26 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		log.Printf("encode response: %v", err)
+	}
+}
+
+func (s *Server) serveHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "only GET supported", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+func (s *Server) serveManifestHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "only GET supported", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(s.manifestPayload()); err != nil {
+		log.Printf("encode manifest response: %v", err)
 	}
 }
 
@@ -179,7 +207,11 @@ func flattenHeaders(headers http.Header) map[string]interface{} {
 }
 
 func (s *Server) handleManifest(req Request) Response {
-	meta := struct {
+	return Response{JSONRPC: "2.0", ID: req.ID, Result: s.manifestPayload()}
+}
+
+func (s *Server) manifestPayload() interface{} {
+	return struct {
 		Manifest  manifest.Manifest          `json:"manifest"`
 		Resources []types.ResourceDescriptor `json:"resources"`
 		Tools     []types.ToolDescriptor     `json:"tools"`
@@ -188,8 +220,6 @@ func (s *Server) handleManifest(req Request) Response {
 		Resources: s.registry.ListResources(),
 		Tools:     s.registry.ListTools(),
 	}
-
-	return Response{JSONRPC: "2.0", ID: req.ID, Result: meta}
 }
 
 func decodeParams(raw *json.RawMessage, v interface{}) *Error {
